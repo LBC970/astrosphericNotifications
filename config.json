@@ -1,0 +1,31 @@
+{
+    "locations": [
+        {
+            "name": "Dexter, MI",
+            "lat": 42.3383,
+            "lon": -83.8895,
+            "max_cloud_cover": 20,
+            "min_transparency": 10,
+            "min_seeing": 1
+        },
+        {
+            "name": "Port Austin, MI",
+            "lat": 44.0461,
+            "lon": -82.9941,
+            "max_cloud_cover": 15,
+            "min_transparency": 8,
+            "min_seeing": 2
+        }
+        /* Uncomment to enable this location:
+        ,
+        {
+            "name": "Oscoda County High Point, MI",
+            "lat": 44.6800,
+            "lon": -84.1300,
+            "max_cloud_cover": 25,
+            "min_transparency": 12,
+            "min_seeing": 3
+        }
+        */
+    ]
+}

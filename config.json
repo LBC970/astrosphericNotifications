@@ -16,16 +16,5 @@
             "min_transparency": 8,
             "min_seeing": 2
         }
-        /* Uncomment to enable this location:
-        ,
-        {
-            "name": "Oscoda County High Point, MI",
-            "lat": 44.6800,
-            "lon": -84.1300,
-            "max_cloud_cover": 25,
-            "min_transparency": 12,
-            "min_seeing": 3
-        }
-        */
     ]
 }

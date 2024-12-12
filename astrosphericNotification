@@ -1,0 +1,197 @@
+import requests
+import sqlite3
+import json
+from datetime import datetime, timedelta
+
+# Pushover credentials
+PUSHOVER_USER_KEY = "<<ENTER YOUR PUSHOVER USER KEY HERE>>"
+PUSHOVER_APP_TOKEN = "<<ENTER YOUR PUSHOVER TOKEN HERE>>"
+
+# Astrospheric API key
+ASTROSPHERIC_API_KEY = "<<ENTER YOUR ASTROSPHERIC API KEY HERE>>"
+
+# Load locations and parameters from config file
+def load_config(config_file="config.json"):
+    try:
+        with open(config_file, "r") as f:
+            config = json.load(f)
+            return config
+    except FileNotFoundError:
+        print(f"Configuration file {config_file} not found.")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON from {config_file}: {e}")
+        return None
+
+# Database setup
+def init_db():
+    conn = sqlite3.connect("notifications.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sent_notifications (
+            id INTEGER PRIMARY KEY,
+            alert_key TEXT UNIQUE,
+            alert_time TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+# Get Astrospheric data
+def get_astro_data(lat, lon):
+    url = "https://astrosphericpublicaccess.azurewebsites.net/api/GetForecastData_V1"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "Latitude": lat,
+        "Longitude": lon,
+        "APIKey": ASTROSPHERIC_API_KEY
+    }
+    response = requests.post(url, json=payload, headers=headers)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"Error fetching data for {lat}, {lon}: {response.status_code} {response.text}")
+        return None
+
+# Send Pushover notification
+def send_pushover_notification(message, title="Notification"):
+    url = "https://api.pushover.net/1/messages.json"
+    payload = {
+        "token": PUSHOVER_APP_TOKEN,
+        "user": PUSHOVER_USER_KEY,
+        "message": message,
+        "title": title
+    }
+    response = requests.post(url, data=payload)
+    if response.status_code == 200:
+        print("Notification sent successfully.")
+    else:
+        print(f"Error sending notification: {response.status_code}")
+
+# Analyze data and determine if conditions are good for astrophotography (The settings for this are in the config file. DO NOT CHANGE THE CODE HERE)
+def analyze_conditions(data, location):
+    if not data:
+        return []
+
+    local_start_time = datetime.fromisoformat(data.get("LocalStartTime"))
+    forecast = data.get("RDPS_CloudCover", [])
+    transparency = data.get("Astrospheric_Transparency", [])
+    seeing = data.get("Astrospheric_Seeing", [])
+
+    alerts = []
+    now = datetime.now()
+
+    conn = sqlite3.connect("notifications.db")
+    cursor = conn.cursor()
+
+    for i in range(len(forecast)):
+        try:
+            hour_offset = forecast[i].get("HourOffset", 0)
+            entry_time = local_start_time + timedelta(hours=hour_offset)
+
+            if not (now <= entry_time <= now + timedelta(days=3)):
+                continue
+
+            if not (entry_time.hour >= 20 or entry_time.hour <= 6):
+                continue
+
+            clouds = round(forecast[i]["Value"]["ActualValue"])
+            transparency_value = transparency[i]["Value"]["ActualValue"]
+            seeing_value = seeing[i]["Value"]["ActualValue"]
+
+            # Check conditions against user-defined thresholds (SEE, TOLD YOU IT PULLED FROM THE CONFIG FILE)
+            if (clouds <= location.get("max_cloud_cover", 20) and
+                transparency_value >= location.get("min_transparency", 10) and
+                seeing_value >= location.get("min_seeing", 1)):
+                alert_key = f"{location['name']},{entry_time}"
+
+                cursor.execute("SELECT alert_time FROM sent_notifications WHERE alert_key = ?", (alert_key,))
+                result = cursor.fetchone()
+
+                if not result:
+                    alerts.append(
+                        f"✅ Good Conditions:\nDate/Time: {entry_time}, Clouds: {clouds}%, Transparency: {transparency_value}, Seeing: {seeing_value}"
+                    )
+                    cursor.execute("INSERT INTO sent_notifications (alert_key, alert_time) VALUES (?, ?)", (alert_key, entry_time.isoformat()))
+                elif now + timedelta(hours=24) >= entry_time and datetime.fromisoformat(result[0]) < now:
+                    alerts.append(
+                        f"✅ Reminder - Date/Time: {entry_time}, Clouds: {clouds}%, Transparency: {transparency_value}, Seeing: {seeing_value}"
+                    )
+                    cursor.execute("UPDATE sent_notifications SET alert_time = ? WHERE alert_key = ?", (entry_time.isoformat(), alert_key))
+            else:
+                alerts.append(
+                    f"❌ Bad Conditions:\nDate/Time: {entry_time}, Clouds: {clouds}%, Transparency: {transparency_value}, Seeing: {seeing_value}"
+                )
+        except (KeyError, IndexError) as e:
+            print(f"Error processing forecast data: {e}")
+
+    conn.commit()
+    conn.close()
+    return alerts
+
+# send a test notification for one location (ONLY USED WHEN THE APPROPRIATE LINE IS COMMENTED OUT BELOW)
+def send_test_notification(location):
+    lat, lon = location["lat"], location["lon"]
+    data = get_astro_data(lat, lon)
+    if data:
+        local_start_time = datetime.fromisoformat(data.get("LocalStartTime"))
+        forecast = data.get("RDPS_CloudCover", [])
+        transparency = data.get("Astrospheric_Transparency", [])
+        seeing = data.get("Astrospheric_Seeing", [])
+
+        good_conditions = []
+        bad_conditions = []
+
+        for i in range(len(forecast[:10])):  # Limit to 10 forecast entries
+            hour_offset = forecast[i].get("HourOffset", 0)
+            entry_time = local_start_time + timedelta(hours=hour_offset)
+            clouds = round(forecast[i]["Value"]["ActualValue"])
+            transparency_value = transparency[i]["Value"]["ActualValue"]
+            seeing_value = seeing[i]["Value"]["ActualValue"]
+
+            if (clouds <= location.get("max_cloud_cover", 20) and
+                transparency_value >= location.get("min_transparency", 10) and
+                seeing_value >= location.get("min_seeing", 1)):
+                good_conditions.append(
+                    f"Date/Time: {entry_time}, Clouds: {clouds}%, Transparency: {transparency_value}, Seeing: {seeing_value}"
+                )
+            else:
+                bad_conditions.append(
+                    f"Date/Time: {entry_time}, Clouds: {clouds}%, Transparency: {transparency_value}, Seeing: {seeing_value}"
+                )
+
+        if good_conditions:
+            send_pushover_notification(
+                f"✅ Good Conditions:\n{chr(10).join(good_conditions)}",
+                title=f"Astrophotography Alert for {location['name']}"
+            )
+        if bad_conditions:
+            send_pushover_notification(
+                f"❌ Bad Conditions:\n{chr(10).join(bad_conditions)}",
+                title=f"Astrophotography Alert for {location['name']}"
+            )
+
+# Main script logic
+if __name__ == "__main__":
+    init_db()
+
+    config = load_config()
+    if not config or "locations" not in config:
+        print("No valid configuration found. Exiting.")
+        exit()
+
+    locations = config["locations"]
+
+    # Uncomment the following line to send test notification for one location
+    # send_test_notification(locations[0])
+
+    for location in locations:
+        lat, lon = location["lat"], location["lon"]
+        data = get_astro_data(lat, lon)
+        alerts = analyze_conditions(data, location)
+
+        if alerts:
+            location_info = f"Location: {location['name']}\n"
+            conditions = "\n".join(alerts)
+            message = f"Astrophotography Alert!\n{location_info}{conditions}"
+            send_pushover_notification(message)

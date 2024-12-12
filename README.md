@@ -1,0 +1,1 @@
+This script sends an API call to Astrospheric, determines if the conditions are looking good in the future for astrophotography, and if they are, sends you a notification through Pushover. It's a WIP.
